@@ -142,21 +142,29 @@ func (t *graphTraversal) visit(ctx context.Context, g *Graph) error {
 	}
 	nodeCh := make(chan *Vertex)
 	eg.Go(func() error {
-		for node := range nodeCh {
-			expect--
-			if expect == 0 {
-				close(nodeCh)
-				return nil
+		for {
+			select {
+			case node, ok := <-nodeCh:
+				if !ok {
+					return nil
+				}
+				expect--
+				if expect == 0 {
+					return nil
+				}
+				t.run(ctx, g, eg, t.adjacentNodesFn(node), nodeCh)
+
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-			t.run(ctx, g, eg, t.adjacentNodesFn(node), nodeCh)
 		}
-		return nil
 	})
 
 	nodes := t.extremityNodesFn(g)
 	t.run(ctx, g, eg, nodes, nodeCh)
 
 	err := eg.Wait()
+	close(nodeCh)
 	return err
 }
 
@@ -183,8 +191,12 @@ func (t *graphTraversal) run(ctx context.Context, graph *Graph, eg *errgroup.Gro
 			if err == nil {
 				graph.UpdateStatus(node.Key, t.targetServiceStatus)
 			}
-			nodeCh <- node
-			return err
+			select {
+			case nodeCh <- node:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		})
 	}
 }
